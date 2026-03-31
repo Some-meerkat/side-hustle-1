@@ -33,6 +33,7 @@ export default function Home() {
 
     try {
       let text = "";
+      let metadata = undefined;
 
       if (mode === "url") {
         if (!url.trim()) {
@@ -49,6 +50,7 @@ export default function Home() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
         text = data.text;
+        metadata = data.metadata;
       } else {
         if (!file) {
           setError("Please upload a file");
@@ -67,11 +69,11 @@ export default function Home() {
         text = data.text;
       }
 
-      setStage("Processing with Claude...");
+      setStage("Classifying content & generating outputs...");
       const res = await fetch("/api/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, metadata }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
