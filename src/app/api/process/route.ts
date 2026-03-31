@@ -4,12 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = "claude-3-haiku-20240307";
 
-// Helper to call Claude
-async function ask(
-  system: string,
-  user: string,
-  maxTokens = 4096
-): Promise<string> {
+async function ask(system: string, user: string, maxTokens = 4096): Promise<string> {
   const message = await client.messages.create({
     model: MODEL,
     max_tokens: maxTokens,
@@ -19,130 +14,66 @@ async function ask(
   return message.content[0].type === "text" ? message.content[0].text : "";
 }
 
-// ─── PASS 1: Classification & Planning ───────────────────────────
+function extractJson(raw: string): string {
+  const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  return match ? match[0] : cleaned;
+}
 
-const CLASSIFY_SYSTEM = `You are a content analysis expert. Your job is to classify and plan the extraction of content.
+// ─── PASS 1: Classification ──────────────────────────────────────
 
-You MUST respond with valid JSON only — no other text, no markdown fences. Use this exact schema:
+const CLASSIFY_SYSTEM = `You are a content analysis expert. Classify and plan the extraction of content.
+Respond with valid JSON only — no other text, no markdown fences. Schema:
 {
-  "content_type": "article" | "documentation" | "research_paper" | "landing_page" | "blog_post" | "legal_document" | "product_page" | "reference" | "tutorial" | "news" | "other",
-  "domain": string (e.g. "technology", "finance", "science", "law", "education"),
-  "audience": "general" | "technical" | "academic" | "business" | "developer",
+  "content_type": "article"|"documentation"|"research_paper"|"landing_page"|"blog_post"|"legal_document"|"product_page"|"reference"|"tutorial"|"news"|"other",
+  "domain": string,
+  "audience": "general"|"technical"|"academic"|"business"|"developer",
   "language": string,
   "estimated_word_count": number,
-  "key_sections": [string] (list the main sections/topics you identified),
-  "extraction_notes": string (what to emphasize, what to deprioritize, any structural quirks)
+  "key_sections": [string],
+  "extraction_notes": string
 }`;
 
-function classifyPrompt(text: string): string {
-  return `Analyze this content and classify it. Identify its type, domain, audience, main sections, and note any structural issues or emphasis points.
+// ─── PASS 2: Combined Output ─────────────────────────────────────
 
-Content (first 5000 chars):
-${text.slice(0, 5000)}`;
-}
+const PROCESS_SYSTEM = `You are an expert at restructuring unstructured content into agent-readable formats. You have been given a content classification to guide your work.
 
-// ─── PASS 2: Structured Markdown ─────────────────────────────────
+Produce ALL THREE outputs below in a single response.
 
-const MARKDOWN_SYSTEM = `You are an expert technical writer who restructures content into clean, agent-readable markdown.
+**Output 1: Structured Markdown**
+Restructure the content into clean, semantic markdown:
+- Single H1 for title, H2 for major sections, H3-H4 for subsections
+- Bullet lists for unordered items, numbered for sequences/steps
+- Tables for comparative/tabular data
+- **Bold** for key terms on first appearance only
+- > blockquotes for critical warnings, important callouts, notable quotes
+- \`code\` for technical terms, commands, file names
+- Remove marketing fluff, navigation remnants, social media links
+- Preserve all factual information
+- Do NOT wrap in markdown fences — output raw markdown
 
-Rules:
-- Use a single H1 for the title, H2 for major sections, H3-H4 for subsections
-- Every section must have content — no empty headings
-- Use bullet lists for unordered items, numbered lists for sequences/steps
-- Use tables for comparative or tabular data (at least 2 columns, at least 2 rows)
-- Use **bold** for key terms on their first appearance only
-- Use > blockquotes for critical warnings, important callouts, or notable quotes
-- Use \`code\` for technical terms, commands, file names
-- Remove all marketing fluff, cookie banners, navigation remnants, social media links
-- Preserve all factual information, data points, and quotes
-- If content has structural markers like [H1], [H2], [LIST], [TABLE], use them as hints for the original structure
-- Write in the same language as the original content
-- Do NOT wrap your response in markdown fences — just output raw markdown`;
+**Output 2: JSON Knowledge Block**
+Extract a knowledge graph using chain-of-thought: first identify specific, nameable entities, then extract verifiable facts with numbers/dates/names, then map relationships between named entities.
+JSON schema (valid JSON only, no fences):
+{"title": string, "summary": string (2-3 factual sentences), "entities": [{"name": string, "type": "person"|"organization"|"product"|"concept"|"technology"|"place"|"event"|"metric"|"regulation"|"publication", "description": string}], "facts": [string], "relationships": [{"subject": string, "predicate": string, "object": string}], "topics": [string], "metadata": {"content_type": string, "language": string, "estimated_word_count": number, "domain": string, "source_quality": "primary"|"secondary"|"tertiary"}}
 
-function markdownPrompt(text: string, plan: string): string {
-  return `Here is the content analysis plan:
-${plan}
+**Output 3: Confidence Score**
+Score the ORIGINAL content (before restructuring) on 5 dimensions, each 0-20 (total 0-100):
+1. Heading Hierarchy: Proper nested headings?
+2. Information Architecture: Logical organization?
+3. Scanability: Lists, tables, bold terms, clear sections?
+4. Signal-to-Noise: Filler, marketing fluff, repetition?
+5. Machine Readability: Can AI parse effectively?
+JSON schema (valid JSON only, no fences):
+{"score": number, "rating": "Excellent"|"Good"|"Fair"|"Poor"|"Very Poor", "dimensions": {"heading_hierarchy": {"score": number, "note": string}, "information_architecture": {"score": number, "note": string}, "scanability": {"score": number, "note": string}, "signal_to_noise": {"score": number, "note": string}, "machine_readability": {"score": number, "note": string}}, "reasoning": string, "improvements": [string]}
 
-Using this plan as your guide, restructure the following content into clean, semantic markdown. Prioritize the sections and emphasis noted in the plan.
-
-Content:
-${text.slice(0, 70000)}`;
-}
-
-// ─── PASS 3: Knowledge Graph Extraction ──────────────────────────
-
-const KNOWLEDGE_SYSTEM = `You are a knowledge extraction specialist. You extract structured knowledge from content using chain-of-thought reasoning.
-
-Process:
-1. First, identify candidate entities. For each, ask: "Is this a specific, nameable thing (person, org, product, concept, place, event, metric)?" Only include if yes.
-2. For each entity, determine its type from: person, organization, product, concept, technology, place, event, metric, regulation, publication.
-3. Extract factual claims — statements that are verifiable or data-backed. Exclude opinions, marketing language, and vague statements.
-4. Identify relationships — only extract relationships where both subject and object are named entities from your entity list.
-5. Determine topics — use specific terms, not generic ones. "React server components" not "web development".
-
-You MUST respond with valid JSON only — no other text, no markdown fences. Use this schema:
-{
-  "title": string,
-  "summary": string (2-3 sentences, factual, no marketing language),
-  "entities": [{ "name": string, "type": string, "description": string (one sentence, factual) }],
-  "facts": [string] (verifiable claims with specifics — numbers, dates, names),
-  "relationships": [{ "subject": string, "predicate": string, "object": string }],
-  "topics": [string] (specific, not generic),
-  "metadata": {
-    "content_type": string,
-    "language": string,
-    "estimated_word_count": number,
-    "domain": string,
-    "source_quality": "primary" | "secondary" | "tertiary"
-  }
-}`;
-
-function knowledgePrompt(text: string, plan: string): string {
-  return `Content analysis plan:
-${plan}
-
-Extract a structured knowledge graph from this content. Think step by step: first identify entities, then verify each is specific and nameable, then extract facts, then relationships.
-
-Content:
-${text.slice(0, 70000)}`;
-}
-
-// ─── PASS 4: Confidence Scoring ──────────────────────────────────
-
-const CONFIDENCE_SYSTEM = `You are a content structure auditor. You evaluate how well-structured the ORIGINAL content is — before any restructuring.
-
-Score on these 5 dimensions (each 0-20 points, total 0-100):
-
-1. **Heading Hierarchy** (0-20): Does it use headings? Are they properly nested (H1 > H2 > H3)? Are they descriptive?
-2. **Information Architecture** (0-20): Is content logically organized? Are related ideas grouped? Is there a clear flow?
-3. **Scanability** (0-20): Can a reader quickly find what they need? Are there lists, tables, bold terms, clear sections?
-4. **Signal-to-Noise** (0-20): Is there filler content? Marketing fluff? Repeated information? Cookie banners? Navigation remnants in body?
-5. **Machine Readability** (0-20): Could an AI agent parse this effectively? Are entities clearly introduced? Are facts stated unambiguously?
-
-You MUST respond with valid JSON only — no other text, no markdown fences. Use this schema:
-{
-  "score": number (0-100, sum of 5 dimensions),
-  "rating": "Excellent" (80-100) | "Good" (60-79) | "Fair" (40-59) | "Poor" (20-39) | "Very Poor" (0-19),
-  "dimensions": {
-    "heading_hierarchy": { "score": number, "note": string },
-    "information_architecture": { "score": number, "note": string },
-    "scanability": { "score": number, "note": string },
-    "signal_to_noise": { "score": number, "note": string },
-    "machine_readability": { "score": number, "note": string }
-  },
-  "reasoning": string (2-3 sentences overall assessment),
-  "improvements": [string] (specific, actionable issues found — not generic advice)
-}`;
-
-function confidencePrompt(text: string, plan: string): string {
-  return `Content analysis plan:
-${plan}
-
-Audit the ORIGINAL content structure below. Score each of the 5 dimensions independently, then sum for the total. Be specific about what works and what doesn't.
-
-Original content:
-${text.slice(0, 20000)}`;
-}
+Respond with EXACTLY this format (no other text):
+===MARKDOWN===
+(structured markdown)
+===JSON===
+(knowledge block JSON)
+===CONFIDENCE===
+(confidence score JSON)`;
 
 // ─── Main handler ────────────────────────────────────────────────
 
@@ -157,48 +88,45 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Prepend metadata context if available
     const metaPrefix = metadata
       ? `[Source metadata] Title: ${metadata.title || "unknown"} | Author: ${metadata.author || "unknown"} | Type: ${metadata.type || "unknown"} | URL: ${metadata.url || "unknown"} | Date: ${metadata.date || "unknown"}\n\n`
       : "";
     const fullText = metaPrefix + text;
 
-    // Extract first JSON object from a string that may have surrounding text
-    function extractJson(raw: string): string {
-      const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      const match = cleaned.match(/\{[\s\S]*\}/);
-      return match ? match[0] : cleaned;
-    }
+    // PASS 1: Classify (small — 2k chars, 512 tokens)
+    const planRaw = await ask(
+      CLASSIFY_SYSTEM,
+      `Analyze this content and classify it.\n\nContent (first 2000 chars):\n${fullText.slice(0, 2000)}`,
+      512
+    );
 
-    // PASS 1: Classify content and create extraction plan
-    const planRaw = await ask(CLASSIFY_SYSTEM, classifyPrompt(fullText), 1024);
     let plan: string;
     try {
-      const parsed = JSON.parse(extractJson(planRaw));
-      plan = JSON.stringify(parsed, null, 2);
+      plan = JSON.stringify(JSON.parse(extractJson(planRaw)), null, 2);
     } catch {
       plan = planRaw;
     }
 
-    // PASS 2, 3, 4: Run in parallel — they all depend on Pass 1 but not each other
-    const [markdownRaw, knowledgeRaw, confidenceRaw] = await Promise.all([
-      ask(MARKDOWN_SYSTEM, markdownPrompt(fullText, plan)),
-      ask(KNOWLEDGE_SYSTEM, knowledgePrompt(fullText, plan)),
-      ask(CONFIDENCE_SYSTEM, confidencePrompt(fullText, plan)),
-    ]);
+    // PASS 2: All outputs in one call, guided by classification
+    const resultRaw = await ask(
+      PROCESS_SYSTEM,
+      `Content classification:\n${plan}\n\nContent to process:\n${fullText.slice(0, 30000)}`
+    );
 
-    // Parse markdown (raw text, no parsing needed)
-    const markdown = markdownRaw.trim() || "Failed to generate markdown output.";
+    // Parse the three sections
+    const markdownMatch = resultRaw.match(/===MARKDOWN===([\s\S]*?)===JSON===/);
+    const jsonMatch = resultRaw.match(/===JSON===([\s\S]*?)===CONFIDENCE===/);
+    const confidenceMatch = resultRaw.match(/===CONFIDENCE===([\s\S]*?)$/);
 
-    // Parse knowledge JSON
+    const markdown = markdownMatch?.[1]?.trim() || resultRaw.trim() || "Failed to generate markdown.";
+
     let knowledge: Record<string, unknown> = {};
     try {
-      knowledge = JSON.parse(extractJson(knowledgeRaw));
+      knowledge = JSON.parse(extractJson(jsonMatch?.[1] || "{}"));
     } catch {
-      knowledge = { error: "Failed to parse JSON knowledge block", raw: knowledgeRaw.slice(0, 500) };
+      knowledge = { error: "Failed to parse JSON knowledge block", raw: (jsonMatch?.[1] || "").slice(0, 500) };
     }
 
-    // Parse confidence JSON
     let confidence: Record<string, unknown> = {
       score: 0,
       rating: "Unknown",
@@ -206,7 +134,7 @@ export async function POST(req: NextRequest) {
       improvements: [],
     };
     try {
-      confidence = JSON.parse(extractJson(confidenceRaw));
+      confidence = JSON.parse(extractJson(confidenceMatch?.[1] || "{}"));
     } catch {
       // keep defaults
     }

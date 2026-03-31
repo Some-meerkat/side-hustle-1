@@ -17,7 +17,6 @@ async function ask(system, user, maxTokens = 4096) {
 
 function cleanJson(raw) {
   let cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-  // If there's text before the JSON, extract the first { ... } block
   const match = cleaned.match(/\{[\s\S]*\}/);
   if (match) return match[0];
   return cleaned;
@@ -37,8 +36,12 @@ Respond with valid JSON only — no other text, no markdown fences. Schema:
   "extraction_notes": string
 }`;
 
-const MARKDOWN_SYSTEM = `You are an expert technical writer who restructures content into clean, agent-readable markdown.
-Rules:
+const PROCESS_SYSTEM = `You are an expert at restructuring unstructured content into agent-readable formats. You have been given a content classification to guide your work.
+
+Produce ALL THREE outputs below in a single response.
+
+**Output 1: Structured Markdown**
+Restructure the content into clean, semantic markdown:
 - Single H1 for title, H2 for major sections, H3-H4 for subsections
 - Bullet lists for unordered items, numbered for sequences/steps
 - Tables for comparative/tabular data
@@ -47,41 +50,30 @@ Rules:
 - \`code\` for technical terms, commands, file names
 - Remove marketing fluff, navigation remnants, social media links
 - Preserve all factual information
-- Do NOT wrap response in markdown fences — output raw markdown`;
+- Do NOT wrap in markdown fences — output raw markdown
 
-const KNOWLEDGE_SYSTEM = `You are a knowledge extraction specialist using chain-of-thought reasoning.
-Process: 1) Identify candidate entities — only include specific, nameable things. 2) Classify type: person, organization, product, concept, technology, place, event, metric, regulation, publication. 3) Extract verifiable factual claims with specifics. 4) Identify relationships where both subject and object are named entities. 5) List specific topics.
-Respond with valid JSON only — no markdown fences. Schema:
-{
-  "title": string,
-  "summary": string (2-3 factual sentences),
-  "entities": [{"name": string, "type": string, "description": string}],
-  "facts": [string],
-  "relationships": [{"subject": string, "predicate": string, "object": string}],
-  "topics": [string],
-  "metadata": {"content_type": string, "language": string, "estimated_word_count": number, "domain": string, "source_quality": "primary"|"secondary"|"tertiary"}
-}`;
+**Output 2: JSON Knowledge Block**
+Extract a knowledge graph using chain-of-thought: first identify specific, nameable entities, then extract verifiable facts with numbers/dates/names, then map relationships between named entities.
+JSON schema (valid JSON only, no fences):
+{"title": string, "summary": string (2-3 factual sentences), "entities": [{"name": string, "type": "person"|"organization"|"product"|"concept"|"technology"|"place"|"event"|"metric"|"regulation"|"publication", "description": string}], "facts": [string], "relationships": [{"subject": string, "predicate": string, "object": string}], "topics": [string], "metadata": {"content_type": string, "language": string, "estimated_word_count": number, "domain": string, "source_quality": "primary"|"secondary"|"tertiary"}}
 
-const CONFIDENCE_SYSTEM = `You are a content structure auditor. Score the ORIGINAL content on 5 dimensions (each 0-20, total 0-100):
-1. Heading Hierarchy (0-20): Proper nested headings?
-2. Information Architecture (0-20): Logical organization?
-3. Scanability (0-20): Lists, tables, bold terms, clear sections?
-4. Signal-to-Noise (0-20): Filler content, marketing fluff, repetition?
-5. Machine Readability (0-20): Can AI parse effectively? Entities clear? Facts unambiguous?
-Respond with valid JSON only — no markdown fences. Schema:
-{
-  "score": number,
-  "rating": "Excellent"|"Good"|"Fair"|"Poor"|"Very Poor",
-  "dimensions": {
-    "heading_hierarchy": {"score": number, "note": string},
-    "information_architecture": {"score": number, "note": string},
-    "scanability": {"score": number, "note": string},
-    "signal_to_noise": {"score": number, "note": string},
-    "machine_readability": {"score": number, "note": string}
-  },
-  "reasoning": string,
-  "improvements": [string]
-}`;
+**Output 3: Confidence Score**
+Score the ORIGINAL content (before restructuring) on 5 dimensions, each 0-20 (total 0-100):
+1. Heading Hierarchy: Proper nested headings?
+2. Information Architecture: Logical organization?
+3. Scanability: Lists, tables, bold terms, clear sections?
+4. Signal-to-Noise: Filler, marketing fluff, repetition?
+5. Machine Readability: Can AI parse effectively?
+JSON schema (valid JSON only, no fences):
+{"score": number, "rating": "Excellent"|"Good"|"Fair"|"Poor"|"Very Poor", "dimensions": {"heading_hierarchy": {"score": number, "note": string}, "information_architecture": {"score": number, "note": string}, "scanability": {"score": number, "note": string}, "signal_to_noise": {"score": number, "note": string}, "machine_readability": {"score": number, "note": string}}, "reasoning": string, "improvements": [string]}
+
+Respond with EXACTLY this format (no other text):
+===MARKDOWN===
+(structured markdown)
+===JSON===
+(knowledge block JSON)
+===CONFIDENCE===
+(confidence score JSON)`;
 
 // ─── URL Content Extraction ──────────────────────────────────────
 
@@ -95,7 +87,6 @@ export async function extractFromUrl(url) {
   if (!response.ok) throw new Error(`Failed to fetch URL: ${response.status}`);
   const html = await response.text();
 
-  // Extract metadata
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const ogTitleMatch = html.match(/property="og:title"\s+content="([^"]*)"/i);
   const ogDescMatch = html.match(/property="og:description"\s+content="([^"]*)"/i);
@@ -110,7 +101,6 @@ export async function extractFromUrl(url) {
     url,
   };
 
-  // Structure-preserving extraction
   const text = html
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
@@ -148,7 +138,7 @@ export async function extractFromUrl(url) {
   return { text, metadata };
 }
 
-// ─── Multi-pass Pipeline ─────────────────────────────────────────
+// ─── 2-Pass Pipeline ─────────────────────────────────────────────
 
 export async function processContent(text, metadata = null) {
   const metaPrefix = metadata
@@ -156,11 +146,11 @@ export async function processContent(text, metadata = null) {
     : "";
   const fullText = metaPrefix + text;
 
-  // PASS 1: Classify
+  // PASS 1: Classify (small, fast — only 2k chars)
   const planRaw = await ask(
     CLASSIFY_SYSTEM,
-    `Analyze this content and classify it.\n\nContent (first 5000 chars):\n${fullText.slice(0, 5000)}`,
-    1024
+    `Analyze this content and classify it.\n\nContent (first 2000 chars):\n${fullText.slice(0, 2000)}`,
+    512
   );
 
   let plan;
@@ -170,25 +160,29 @@ export async function processContent(text, metadata = null) {
     plan = planRaw;
   }
 
-  // PASS 2, 3, 4: Parallel
-  const [markdownRaw, knowledgeRaw, confidenceRaw] = await Promise.all([
-    ask(MARKDOWN_SYSTEM, `Content analysis plan:\n${plan}\n\nRestructure into clean markdown:\n\nContent:\n${fullText.slice(0, 70000)}`),
-    ask(KNOWLEDGE_SYSTEM, `Content analysis plan:\n${plan}\n\nExtract knowledge graph step by step:\n\nContent:\n${fullText.slice(0, 70000)}`),
-    ask(CONFIDENCE_SYSTEM, `Content analysis plan:\n${plan}\n\nAudit original content structure:\n\nOriginal content:\n${fullText.slice(0, 20000)}`),
-  ]);
+  // PASS 2: All outputs in one call, guided by classification
+  const resultRaw = await ask(
+    PROCESS_SYSTEM,
+    `Content classification:\n${plan}\n\nContent to process:\n${fullText.slice(0, 30000)}`
+  );
 
-  const markdown = markdownRaw.trim() || "Failed to generate markdown.";
+  // Parse the three sections
+  const markdownMatch = resultRaw.match(/===MARKDOWN===([\s\S]*?)===JSON===/);
+  const jsonMatch = resultRaw.match(/===JSON===([\s\S]*?)===CONFIDENCE===/);
+  const confidenceMatch = resultRaw.match(/===CONFIDENCE===([\s\S]*?)$/);
+
+  const markdown = markdownMatch?.[1]?.trim() || resultRaw.trim() || "Failed to generate markdown.";
 
   let knowledge = {};
   try {
-    knowledge = JSON.parse(cleanJson(knowledgeRaw));
+    knowledge = JSON.parse(cleanJson(jsonMatch?.[1] || "{}"));
   } catch {
-    knowledge = { error: "Failed to parse knowledge block", raw: knowledgeRaw.slice(0, 300) };
+    knowledge = { error: "Failed to parse knowledge block", raw: (jsonMatch?.[1] || "").slice(0, 300) };
   }
 
   let confidence = { score: 0, rating: "Unknown", reasoning: "Failed to parse", improvements: [] };
   try {
-    confidence = JSON.parse(cleanJson(confidenceRaw));
+    confidence = JSON.parse(cleanJson(confidenceMatch?.[1] || "{}"));
   } catch {
     // keep defaults
   }

@@ -1,4 +1,4 @@
-// ─── System prompts for multi-pass pipeline ─────────────────────
+// ─── System prompts for 2-pass pipeline ──────────────────────────
 
 const CLASSIFY_SYSTEM = `You are a content analysis expert. Classify and plan the extraction of content.
 Respond with valid JSON only — no other text, no markdown fences. Schema:
@@ -12,8 +12,12 @@ Respond with valid JSON only — no other text, no markdown fences. Schema:
   "extraction_notes": string
 }`;
 
-const MARKDOWN_SYSTEM = `You are an expert technical writer who restructures content into clean, agent-readable markdown.
-Rules:
+const PROCESS_SYSTEM = `You are an expert at restructuring unstructured content into agent-readable formats. You have been given a content classification to guide your work.
+
+Produce ALL THREE outputs below in a single response.
+
+**Output 1: Structured Markdown**
+Restructure the content into clean, semantic markdown:
 - Single H1 for title, H2 for major sections, H3-H4 for subsections
 - Bullet lists for unordered items, numbered for sequences/steps
 - Tables for comparative/tabular data
@@ -22,41 +26,30 @@ Rules:
 - \`code\` for technical terms, commands, file names
 - Remove marketing fluff, navigation remnants, social media links
 - Preserve all factual information
-- Do NOT wrap response in markdown fences — output raw markdown`;
+- Do NOT wrap in markdown fences — output raw markdown
 
-const KNOWLEDGE_SYSTEM = `You are a knowledge extraction specialist using chain-of-thought reasoning.
-Process: 1) Identify candidate entities — only include specific, nameable things. 2) Classify type: person, organization, product, concept, technology, place, event, metric, regulation, publication. 3) Extract verifiable factual claims with specifics. 4) Identify relationships where both subject and object are named entities. 5) List specific topics.
-Respond with valid JSON only — no markdown fences. Schema:
-{
-  "title": string,
-  "summary": string (2-3 factual sentences),
-  "entities": [{"name": string, "type": string, "description": string}],
-  "facts": [string],
-  "relationships": [{"subject": string, "predicate": string, "object": string}],
-  "topics": [string],
-  "metadata": {"content_type": string, "language": string, "estimated_word_count": number, "domain": string, "source_quality": "primary"|"secondary"|"tertiary"}
-}`;
+**Output 2: JSON Knowledge Block**
+Extract a knowledge graph using chain-of-thought: first identify specific, nameable entities, then extract verifiable facts with numbers/dates/names, then map relationships between named entities.
+JSON schema (valid JSON only, no fences):
+{"title": string, "summary": string (2-3 factual sentences), "entities": [{"name": string, "type": "person"|"organization"|"product"|"concept"|"technology"|"place"|"event"|"metric"|"regulation"|"publication", "description": string}], "facts": [string], "relationships": [{"subject": string, "predicate": string, "object": string}], "topics": [string], "metadata": {"content_type": string, "language": string, "estimated_word_count": number, "domain": string, "source_quality": "primary"|"secondary"|"tertiary"}}
 
-const CONFIDENCE_SYSTEM = `You are a content structure auditor. Score the ORIGINAL content on 5 dimensions (each 0-20, total 0-100):
-1. Heading Hierarchy (0-20): Proper nested headings?
-2. Information Architecture (0-20): Logical organization?
-3. Scanability (0-20): Lists, tables, bold terms, clear sections?
-4. Signal-to-Noise (0-20): Filler content, marketing fluff, repetition?
-5. Machine Readability (0-20): Can AI parse effectively? Entities clear? Facts unambiguous?
-Respond with valid JSON only — no markdown fences. Schema:
-{
-  "score": number,
-  "rating": "Excellent"|"Good"|"Fair"|"Poor"|"Very Poor",
-  "dimensions": {
-    "heading_hierarchy": {"score": number, "note": string},
-    "information_architecture": {"score": number, "note": string},
-    "scanability": {"score": number, "note": string},
-    "signal_to_noise": {"score": number, "note": string},
-    "machine_readability": {"score": number, "note": string}
-  },
-  "reasoning": string,
-  "improvements": [string]
-}`;
+**Output 3: Confidence Score**
+Score the ORIGINAL content (before restructuring) on 5 dimensions, each 0-20 (total 0-100):
+1. Heading Hierarchy: Proper nested headings?
+2. Information Architecture: Logical organization?
+3. Scanability: Lists, tables, bold terms, clear sections?
+4. Signal-to-Noise: Filler, marketing fluff, repetition?
+5. Machine Readability: Can AI parse effectively?
+JSON schema (valid JSON only, no fences):
+{"score": number, "rating": "Excellent"|"Good"|"Fair"|"Poor"|"Very Poor", "dimensions": {"heading_hierarchy": {"score": number, "note": string}, "information_architecture": {"score": number, "note": string}, "scanability": {"score": number, "note": string}, "signal_to_noise": {"score": number, "note": string}, "machine_readability": {"score": number, "note": string}}, "reasoning": string, "improvements": [string]}
+
+Respond with EXACTLY this format (no other text):
+===MARKDOWN===
+(structured markdown)
+===JSON===
+(knowledge block JSON)
+===CONFIDENCE===
+(confidence score JSON)`;
 
 // ─── API call helper ─────────────────────────────────────────────
 
@@ -121,7 +114,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// ─── Multi-pass pipeline ─────────────────────────────────────────
+// ─── 2-Pass Pipeline ─────────────────────────────────────────────
 
 async function handleProcess(text, tabId) {
   const { anthropicApiKey } = await chrome.storage.sync.get("anthropicApiKey");
@@ -137,14 +130,14 @@ async function handleProcess(text, tabId) {
   }
 
   try {
-    const content = text.slice(0, 80000);
+    const content = text.slice(0, 30000);
 
-    // PASS 1: Classify
+    // PASS 1: Classify (small — 2k chars)
     const planRaw = await askClaude(
       anthropicApiKey,
       CLASSIFY_SYSTEM,
-      `Analyze this content and classify it. Identify its type, domain, audience, main sections, and structural notes.\n\nContent (first 5000 chars):\n${content.slice(0, 5000)}`,
-      1024
+      `Analyze this content and classify it.\n\nContent (first 2000 chars):\n${content.slice(0, 2000)}`,
+      512
     );
 
     let plan;
@@ -154,37 +147,30 @@ async function handleProcess(text, tabId) {
       plan = planRaw;
     }
 
-    // PASS 2, 3, 4: Run in parallel
-    const [markdownRaw, knowledgeRaw, confidenceRaw] = await Promise.all([
-      askClaude(
-        anthropicApiKey,
-        MARKDOWN_SYSTEM,
-        `Content analysis plan:\n${plan}\n\nRestructure this content into clean, semantic markdown.\n\nContent:\n${content.slice(0, 70000)}`
-      ),
-      askClaude(
-        anthropicApiKey,
-        KNOWLEDGE_SYSTEM,
-        `Content analysis plan:\n${plan}\n\nExtract a structured knowledge graph. Think step by step.\n\nContent:\n${content.slice(0, 70000)}`
-      ),
-      askClaude(
-        anthropicApiKey,
-        CONFIDENCE_SYSTEM,
-        `Content analysis plan:\n${plan}\n\nAudit the original content structure. Score each of the 5 dimensions.\n\nOriginal content:\n${content.slice(0, 20000)}`
-      ),
-    ]);
+    // PASS 2: All outputs in one call
+    const resultRaw = await askClaude(
+      anthropicApiKey,
+      PROCESS_SYSTEM,
+      `Content classification:\n${plan}\n\nContent to process:\n${content}`
+    );
 
-    const markdown = markdownRaw.trim() || "Failed to generate markdown.";
+    // Parse sections
+    const markdownMatch = resultRaw.match(/===MARKDOWN===([\s\S]*?)===JSON===/);
+    const jsonMatch = resultRaw.match(/===JSON===([\s\S]*?)===CONFIDENCE===/);
+    const confidenceMatch = resultRaw.match(/===CONFIDENCE===([\s\S]*?)$/);
+
+    const markdown = markdownMatch?.[1]?.trim() || resultRaw.trim() || "Failed to generate markdown.";
 
     let knowledge = {};
     try {
-      knowledge = JSON.parse(cleanJson(knowledgeRaw));
+      knowledge = JSON.parse(cleanJson(jsonMatch?.[1] || "{}"));
     } catch {
       knowledge = { error: "Failed to parse JSON knowledge block" };
     }
 
     let confidence = { score: 0, rating: "Unknown", reasoning: "Failed to parse", improvements: [] };
     try {
-      confidence = JSON.parse(cleanJson(confidenceRaw));
+      confidence = JSON.parse(cleanJson(confidenceMatch?.[1] || "{}"));
     } catch {
       // keep defaults
     }
