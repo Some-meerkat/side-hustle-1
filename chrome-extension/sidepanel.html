@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Readable</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #fafafa;
+      color: #171717;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      background: white;
+      border-bottom: 1px solid #e5e7eb;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      background: #4f46e5;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 11px;
+    }
+    .header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #111;
+    }
+    .settings-btn {
+      background: none;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 5px 8px;
+      cursor: pointer;
+      color: #666;
+      font-size: 12px;
+    }
+    .settings-btn:hover { background: #f3f4f6; }
+
+    /* Settings */
+    .settings {
+      padding: 16px;
+      background: white;
+      border-bottom: 1px solid #e5e7eb;
+      display: none;
+    }
+    .settings.visible { display: block; }
+    .settings label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .settings input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      font-size: 12px;
+      outline: none;
+      font-family: monospace;
+    }
+    .settings input:focus { border-color: #4f46e5; box-shadow: 0 0 0 2px rgba(79,70,229,0.1); }
+    .save-key-btn {
+      margin-top: 8px;
+      padding: 7px 16px;
+      background: #4f46e5;
+      color: white;
+      border: none;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+    }
+    .save-key-btn:hover { background: #4338ca; }
+    .key-status {
+      margin-top: 6px;
+      font-size: 11px;
+      color: #16a34a;
+      display: none;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      background: white;
+      border-bottom: 1px solid #e5e7eb;
+      position: sticky;
+      top: 56px;
+      z-index: 9;
+    }
+    .tab {
+      flex: 1;
+      padding: 10px 8px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 500;
+      color: #888;
+      cursor: pointer;
+      border: none;
+      background: none;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .tab:hover { color: #555; }
+    .tab.active {
+      color: #4f46e5;
+      border-bottom-color: #4f46e5;
+      background: white;
+    }
+    .tab-badge {
+      display: inline-block;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 700;
+      margin-right: 4px;
+      background: #e5e7eb;
+      color: #888;
+    }
+    .tab.active .tab-badge {
+      background: #e0e7ff;
+      color: #4f46e5;
+    }
+
+    /* Content */
+    .content {
+      padding: 16px;
+      min-height: 300px;
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* Loading */
+    .loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 16px;
+      gap: 12px;
+    }
+    .spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid #e5e7eb;
+      border-top-color: #4f46e5;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { font-size: 13px; color: #888; font-weight: 500; }
+
+    /* Empty state */
+    .empty {
+      text-align: center;
+      padding: 60px 20px;
+      color: #aaa;
+    }
+    .empty-icon { font-size: 36px; margin-bottom: 12px; }
+    .empty h3 { font-size: 15px; color: #666; margin-bottom: 4px; }
+    .empty p { font-size: 12px; }
+
+    /* Error */
+    .error-box {
+      margin: 16px;
+      padding: 12px 16px;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 10px;
+      color: #dc2626;
+      font-size: 12px;
+      display: none;
+    }
+
+    /* Markdown content */
+    .md-content h1 { font-size: 20px; font-weight: 700; margin: 16px 0 8px; color: #111; }
+    .md-content h2 { font-size: 17px; font-weight: 600; margin: 14px 0 6px; color: #222; }
+    .md-content h3 { font-size: 14px; font-weight: 600; margin: 12px 0 4px; color: #333; }
+    .md-content h4 { font-size: 13px; font-weight: 600; margin: 10px 0 4px; color: #444; }
+    .md-content p { margin: 6px 0; color: #555; line-height: 1.6; }
+    .md-content ul, .md-content ol { margin: 6px 0; padding-left: 20px; color: #555; }
+    .md-content li { margin: 3px 0; }
+    .md-content strong { color: #111; }
+    .md-content blockquote {
+      margin: 8px 0;
+      padding: 8px 12px;
+      border-left: 3px solid #a5b4fc;
+      background: #f5f3ff;
+      color: #555;
+      border-radius: 0 6px 6px 0;
+    }
+    .md-content code {
+      background: #eef2ff;
+      color: #4f46e5;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .md-content pre {
+      background: #1e1e2e;
+      color: #e5e7eb;
+      padding: 12px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 11px;
+      margin: 8px 0;
+    }
+    .md-content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 8px 0;
+      font-size: 12px;
+    }
+    .md-content th, .md-content td {
+      padding: 6px 10px;
+      border: 1px solid #e5e7eb;
+      text-align: left;
+    }
+    .md-content th { background: #f9fafb; font-weight: 600; }
+
+    /* JSON view */
+    .section-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .entity-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 10px;
+      background: #f9fafb;
+      border: 1px solid #f3f4f6;
+      border-radius: 8px;
+      margin-bottom: 6px;
+    }
+    .entity-type {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 10px;
+      background: #e0e7ff;
+      color: #4f46e5;
+      white-space: nowrap;
+    }
+    .entity-name { font-size: 12px; font-weight: 500; color: #111; }
+    .entity-desc { font-size: 11px; color: #888; margin-top: 2px; }
+    .fact-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 4px 0;
+      font-size: 12px;
+      color: #555;
+    }
+    .fact-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #a5b4fc;
+      margin-top: 6px;
+      flex-shrink: 0;
+    }
+    .topic-tag {
+      display: inline-block;
+      padding: 3px 10px;
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      border-radius: 20px;
+      font-size: 11px;
+      color: #555;
+      margin: 0 4px 4px 0;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .meta-item {
+      padding: 8px 10px;
+      background: #f9fafb;
+      border: 1px solid #f3f4f6;
+      border-radius: 8px;
+    }
+    .meta-key { font-size: 10px; color: #999; text-transform: uppercase; }
+    .meta-val { font-size: 12px; font-weight: 500; color: #111; margin-top: 2px; }
+    .raw-json {
+      margin-top: 12px;
+      font-size: 11px;
+      color: #999;
+      cursor: pointer;
+    }
+    .raw-json:hover { color: #666; }
+    .raw-json-content {
+      display: none;
+      margin-top: 6px;
+      background: #1e1e2e;
+      color: #e5e7eb;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 11px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Confidence */
+    .confidence-center { text-align: center; }
+    .score-ring { margin: 0 auto 16px; }
+    .score-number { font-size: 36px; font-weight: 700; color: #111; }
+    .score-max { font-size: 12px; color: #999; }
+    .rating-badge {
+      display: inline-block;
+      padding: 5px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .analysis-box {
+      padding: 14px;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      text-align: left;
+    }
+    .improvement-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 10px;
+      background: #f9fafb;
+      border: 1px solid #f3f4f6;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      text-align: left;
+    }
+    .improvement-num {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #e5e7eb;
+      color: #666;
+      font-size: 10px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    /* Action bar */
+    .actions {
+      display: flex;
+      gap: 6px;
+      padding: 10px 16px;
+      border-top: 1px solid #f3f4f6;
+      background: white;
+      position: sticky;
+      bottom: 0;
+      justify-content: flex-end;
+    }
+    .action-btn {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 500;
+      color: #666;
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .action-btn:hover { background: #f9fafb; }
+
+    .space-y > * + * { margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <div class="logo">AR</div>
+      <h1>Agent Readable</h1>
+    </div>
+    <button class="settings-btn" id="settingsToggle">Settings</button>
+  </div>
+
+  <div class="settings" id="settingsPanel">
+    <label>Anthropic API Key</label>
+    <input type="password" id="apiKeyInput" placeholder="sk-ant-..." />
+    <button class="save-key-btn" id="saveKeyBtn">Save Key</button>
+    <div class="key-status" id="keyStatus">Key saved successfully</div>
+  </div>
+
+  <div class="error-box" id="errorBox"></div>
+
+  <div id="loadingState" style="display:none">
+    <div class="loading">
+      <div class="spinner"></div>
+      <div class="loading-text">Processing with Claude...</div>
+    </div>
+  </div>
+
+  <div id="emptyState">
+    <div class="empty">
+      <div class="empty-icon">AR</div>
+      <h3>No content yet</h3>
+      <p>Click the AR button on any webpage to convert it to agent-readable format.</p>
+    </div>
+  </div>
+
+  <div id="resultState" style="display:none">
+    <div class="tabs">
+      <button class="tab active" data-tab="markdown"><span class="tab-badge">M</span>Markdown</button>
+      <button class="tab" data-tab="json"><span class="tab-badge">{}</span>JSON</button>
+      <button class="tab" data-tab="confidence"><span class="tab-badge">%</span>Score</button>
+    </div>
+
+    <div class="content">
+      <div class="tab-panel active" id="panel-markdown">
+        <div class="md-content" id="markdownContent"></div>
+      </div>
+      <div class="tab-panel" id="panel-json">
+        <div id="jsonContent" class="space-y"></div>
+      </div>
+      <div class="tab-panel" id="panel-confidence">
+        <div id="confidenceContent" class="confidence-center"></div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="action-btn" id="copyBtn">Copy</button>
+      <button class="action-btn" id="downloadBtn">Download</button>
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
