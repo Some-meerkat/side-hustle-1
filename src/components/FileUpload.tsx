@@ -38,6 +38,8 @@ export default function FileUpload({ onFileSelect, disabled }: FileUploadProps) 
       "application/pdf",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "application/msword",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-excel",
     ];
     return valid.includes(file.type);
   };
@@ -56,7 +58,7 @@ export default function FileUpload({ onFileSelect, disabled }: FileUploadProps) 
     >
       <input
         type="file"
-        accept=".pdf,.doc,.docx"
+        accept=".pdf,.doc,.docx,.xls,.xlsx"
         onChange={handleChange}
         disabled={disabled}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
@@ -85,7 +87,7 @@ export default function FileUpload({ onFileSelect, disabled }: FileUploadProps) 
               Drop a file here, or{" "}
               <span className="text-indigo-600">browse</span>
             </p>
-            <p className="text-xs text-gray-400">PDF or Word documents</p>
+            <p className="text-xs text-gray-400">PDF, Word, or Excel documents</p>
           </>
         )}
       </div>

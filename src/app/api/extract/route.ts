@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import mammoth from "mammoth";
 import * as pdfParse from "pdf-parse";
+import * as XLSX from "xlsx";
 
 export async function POST(req: NextRequest) {
   try {
@@ -22,9 +23,19 @@ export async function POST(req: NextRequest) {
     } else if (name.endsWith(".docx") || name.endsWith(".doc")) {
       const result = await mammoth.extractRawText({ buffer });
       text = result.value;
+    } else if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+      const workbook = XLSX.read(buffer, { type: "buffer" });
+      const lines: string[] = [];
+      for (const sheetName of workbook.SheetNames) {
+        lines.push(`## Sheet: ${sheetName}`);
+        const sheet = workbook.Sheets[sheetName];
+        const csv = XLSX.utils.sheet_to_csv(sheet);
+        lines.push(csv);
+      }
+      text = lines.join("\n\n");
     } else {
       return NextResponse.json(
-        { error: "Unsupported file type. Please upload a PDF or Word document." },
+        { error: "Unsupported file type. Please upload a PDF, Word, or Excel document." },
         { status: 400 }
       );
     }
